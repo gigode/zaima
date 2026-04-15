@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## 0.2.0 - 2026-04-15
+
+Dashboard-style terminal release.
+
+### Added
+
+- TTY dashboard layout with header, table rows, and summary footer
+- Per-assistant themed badges for `codex`, `claude-code`, `gemini`, and `hermes-agent`
+- Color-coded login status badges
+- Dashboard summary counts for `ok`, `no`, and `missing`
+
+### Changed
+
+- Interactive terminal mode now renders a richer monitoring-style panel instead of plain result rows
+- Non-TTY output still falls back to compact plain text for piping and scripts
+
+### Notes
+
+- Dashboard mode is enabled automatically on TTY output
+- Existing `ZAIMA_PROGRESS=0` behavior remains supported
+
 ## 0.1.0 - 2026-04-15
 
 Initial public release.

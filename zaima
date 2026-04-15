@@ -3,9 +3,102 @@
 set -u
 set -o pipefail
 
-ZAIMA_VERSION="0.1.0"
+ZAIMA_VERSION="0.2.0"
 TIMEOUT_SECONDS="${ZAIMA_TIMEOUT:-20}"
 TOTAL_CHECKS=4
+PANEL_WIDTH=76
+COUNT_OK=0
+COUNT_NO=0
+COUNT_MISSING=0
+RENDER_DASHBOARD=0
+
+init_colors() {
+  if [[ -t 1 && "${NO_COLOR:-0}" != "1" && "${TERM:-}" != "dumb" ]]; then
+    C_RESET=$'\033[0m'
+    C_DIM=$'\033[2m'
+    C_BOLD=$'\033[1m'
+    C_BLACK=$'\033[30m'
+    C_WHITE=$'\033[97m'
+    C_BLUE=$'\033[34m'
+    C_CYAN=$'\033[36m'
+    C_GREEN=$'\033[32m'
+    C_YELLOW=$'\033[33m'
+    C_RED=$'\033[31m'
+    C_MAGENTA=$'\033[35m'
+    C_BG_BLUE=$'\033[44m'
+    C_BG_CYAN=$'\033[46m'
+    C_BG_GREEN=$'\033[42m'
+    C_BG_YELLOW=$'\033[43m'
+    C_BG_RED=$'\033[41m'
+    C_BG_MAGENTA=$'\033[45m'
+  else
+    C_RESET=''
+    C_DIM=''
+    C_BOLD=''
+    C_BLACK=''
+    C_WHITE=''
+    C_BLUE=''
+    C_CYAN=''
+    C_GREEN=''
+    C_YELLOW=''
+    C_RED=''
+    C_MAGENTA=''
+    C_BG_BLUE=''
+    C_BG_CYAN=''
+    C_BG_GREEN=''
+    C_BG_YELLOW=''
+    C_BG_RED=''
+    C_BG_MAGENTA=''
+  fi
+}
+
+assistant_color() {
+  case "$1" in
+    codex) printf '%s' "$C_CYAN" ;;
+    claude-code) printf '%s' "$C_MAGENTA" ;;
+    gemini) printf '%s' "$C_BLUE" ;;
+    hermes-agent) printf '%s' "$C_YELLOW" ;;
+    *) printf '%s' "$C_BOLD" ;;
+  esac
+}
+
+assistant_tag() {
+  case "$1" in
+    codex) printf '%s' "[COD]" ;;
+    claude-code) printf '%s' "[CLA]" ;;
+    gemini) printf '%s' "[GEM]" ;;
+    hermes-agent) printf '%s' "[HER]" ;;
+    *) printf '%s' "[AI ]" ;;
+  esac
+}
+
+assistant_badge() {
+  case "$1" in
+    codex) printf '%s' "${C_BG_CYAN}${C_BLACK}${C_BOLD} COD ${C_RESET}" ;;
+    claude-code) printf '%s' "${C_BG_MAGENTA}${C_WHITE}${C_BOLD} CLA ${C_RESET}" ;;
+    gemini) printf '%s' "${C_BG_BLUE}${C_WHITE}${C_BOLD} GEM ${C_RESET}" ;;
+    hermes-agent) printf '%s' "${C_BG_YELLOW}${C_BLACK}${C_BOLD} HER ${C_RESET}" ;;
+    *) printf '%s' "${C_BOLD}[AI]${C_RESET}" ;;
+  esac
+}
+
+login_color() {
+  case "$1" in
+    ok) printf '%s' "$C_GREEN" ;;
+    no) printf '%s' "$C_RED" ;;
+    missing) printf '%s' "$C_YELLOW" ;;
+    *) printf '%s' "$C_RESET" ;;
+  esac
+}
+
+login_badge() {
+  case "$1" in
+    ok) printf '%s' "${C_BG_GREEN}${C_BLACK}${C_BOLD}  OK  ${C_RESET}" ;;
+    no) printf '%s' "${C_BG_RED}${C_WHITE}${C_BOLD}  NO  ${C_RESET}" ;;
+    missing) printf '%s' "${C_BG_YELLOW}${C_BLACK}${C_BOLD} MISS ${C_RESET}" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
 
 print_help() {
   cat <<'EOF'
@@ -34,6 +127,58 @@ quiet_run() {
   timeout "$TIMEOUT_SECONDS" "$@" 2>&1
 }
 
+dashboard_enabled() {
+  [[ "$RENDER_DASHBOARD" == "1" ]]
+}
+
+trim_text() {
+  local text="$1"
+  local width="$2"
+
+  if (( ${#text} <= width )); then
+    printf '%s' "$text"
+  elif (( width > 3 )); then
+    printf '%s' "${text:0:width-3}..."
+  else
+    printf '%s' "${text:0:width}"
+  fi
+}
+
+print_border() {
+  printf '+%s+\n' "$(printf '%*s' "$PANEL_WIDTH" '' | tr ' ' '-')"
+}
+
+print_panel_line() {
+  local text="$1"
+  local clipped
+
+  clipped="$(trim_text "$text" "$PANEL_WIDTH")"
+  printf '| %-*s |\n' "$PANEL_WIDTH" "$clipped"
+}
+
+print_dashboard_header() {
+  if ! dashboard_enabled; then
+    return
+  fi
+
+  print_border
+  print_panel_line "ZAIMA Dashboard"
+  print_panel_line "AI CLI login + version monitor | assistants: $TOTAL_CHECKS | timeout: ${TIMEOUT_SECONDS}s"
+  print_border
+  print_panel_line "assistant              | login  | version"
+  print_border
+}
+
+print_dashboard_footer() {
+  if ! dashboard_enabled; then
+    return
+  fi
+
+  print_border
+  print_panel_line "summary | ok=$COUNT_OK | no=$COUNT_NO | missing=$COUNT_MISSING"
+  print_border
+}
+
 progress_enabled() {
   [[ -t 1 && "${ZAIMA_PROGRESS:-1}" != "0" ]]
 }
@@ -45,10 +190,20 @@ show_spinner() {
   local marks='|/-\'
   local i=0
   local mark
+  local name_color
+  local badge
+
+  name_color="$(assistant_color "$name")"
+  badge="$(assistant_badge "$name")"
 
   while kill -0 "$pid" 2>/dev/null; do
     mark="${marks:i%${#marks}:1}"
-    printf '\r[%s/%s] checking %-12s %s' "$index" "$TOTAL_CHECKS" "$name" "$mark"
+    printf '\r%s[%s/%s]%s %schecking%s %s %s%-12s%s %s%s%s' \
+      "$C_DIM" "$index" "$TOTAL_CHECKS" "$C_RESET" \
+      "$C_DIM" "$C_RESET" \
+      "$badge" \
+      "$name_color" "$name" "$C_RESET" \
+      "$C_CYAN" "$mark" "$C_RESET"
     sleep 0.12
     i=$((i + 1))
   done
@@ -60,12 +215,39 @@ print_result() {
   local name="$1"
   local login="$2"
   local version="$3"
+  local name_color
+  local badge
+  local state_badge
+  local name_pad
+  local version_pad
 
   if [[ -z "$version" ]]; then
     version="-"
   fi
 
-  printf '%-12s login=%-7s version=%s\n' "$name" "$login" "$version"
+  if [[ -n "${ZAIMA_RESULT_META:-}" ]]; then
+    printf '%s\n' "$login" >"$ZAIMA_RESULT_META"
+  fi
+
+  name_color="$(assistant_color "$name")"
+  badge="$(assistant_badge "$name")"
+  state_badge="$(login_badge "$login")"
+  name_pad="$(printf '%-12s' "$name")"
+  version_pad="$(printf '%-44s' "$(trim_text "$version" 44)")"
+
+  if dashboard_enabled; then
+    printf '| %s %s%s%s | %s | %s%s%s |\n' \
+      "$badge" \
+      "$name_color" "$name_pad" "$C_RESET" \
+      "$state_badge" \
+      "$name_color" "$version_pad" "$C_RESET"
+  else
+    printf '%s %s%-12s%s | login %s | version %s%s%s\n' \
+      "$(assistant_tag "$name")" \
+      "$name_color" "$name" "$C_RESET" \
+      "$login" \
+      "$name_color" "$version" "$C_RESET"
+  fi
 }
 
 command_missing_result() {
@@ -186,15 +368,31 @@ case "${1:-}" in
     ;;
 esac
 
+init_colors
+if [[ -t 1 && "${ZAIMA_DASHBOARD:-1}" != "0" ]]; then
+  RENDER_DASHBOARD=1
+fi
+print_dashboard_header
+
+record_status() {
+  case "$1" in
+    ok) COUNT_OK=$((COUNT_OK + 1)) ;;
+    no) COUNT_NO=$((COUNT_NO + 1)) ;;
+    missing) COUNT_MISSING=$((COUNT_MISSING + 1)) ;;
+  esac
+}
+
 run_check() {
   local index="$1"
   local name="$2"
   local fn="$3"
   local tmp_file
+  local meta_file
   local pid
 
   tmp_file="$(mktemp)"
-  "$fn" >"$tmp_file" &
+  meta_file="$(mktemp)"
+  ZAIMA_RESULT_META="$meta_file" "$fn" >"$tmp_file" &
   pid=$!
 
   if progress_enabled; then
@@ -203,10 +401,13 @@ run_check() {
 
   wait "$pid"
   cat "$tmp_file"
+  record_status "$(cat "$meta_file" 2>/dev/null)"
   rm -f "$tmp_file"
+  rm -f "$meta_file"
 }
 
 run_check 1 "codex" report_codex
 run_check 2 "claude-code" report_claude
 run_check 3 "gemini" report_gemini
 run_check 4 "hermes-agent" report_hermes
+print_dashboard_footer

@@ -8,13 +8,31 @@ It is designed for one-shot terminal use:
 zaima
 ```
 
-By default it prints exactly one result line per assistant:
+In a normal interactive terminal it renders a small dashboard:
 
 ```text
-codex        login=ok      version=codex-cli 0.120.0
-claude-code  login=ok      version=2.1.97 (Claude Code)
-gemini       login=ok      version=0.37.2
-hermes-agent login=ok      version=Hermes Agent v0.9.0 (2026.4.13)
++----------------------------------------------------------------------------+
+| ZAIMA Dashboard                                                            |
+| AI CLI login + version monitor | assistants: 4 | timeout: 20s             |
++----------------------------------------------------------------------------+
+| assistant              | login  | version                                  |
++----------------------------------------------------------------------------+
+|  COD  codex        |   OK   | codex-cli 0.120.0                          |
+|  CLA  claude-code  |   OK   | 2.1.97 (Claude Code)                       |
+|  GEM  gemini       |   OK   | 0.37.2                                     |
+|  HER  hermes-agent |   OK   | Hermes Agent v0.9.0 (2026.4.13)            |
++----------------------------------------------------------------------------+
+| summary | ok=4 | no=0 | missing=0                                       |
++----------------------------------------------------------------------------+
+```
+
+When stdout is not a TTY, it falls back to compact plain text:
+
+```text
+[COD] codex        | login ok | version codex-cli 0.120.0
+[CLA] claude-code  | login ok | version 2.1.97 (Claude Code)
+[GEM] gemini       | login ok | version 0.37.2
+[HER] hermes-agent | login ok | version Hermes Agent v0.9.0 (2026.4.13)
 ```
 
 ## What It Checks
@@ -91,6 +109,12 @@ zaima
 ZAIMA_PROGRESS=0 zaima
 ```
 
+### Disable the dashboard panel
+
+```bash
+ZAIMA_DASHBOARD=0 zaima
+```
+
 ### Increase per-check timeout
 
 ```bash
@@ -106,13 +130,17 @@ zaima --version
 
 ## Output Format
 
-Each line uses this shape:
+TTY mode:
 
-```text
-<assistant-name> login=<ok|no|missing> version=<version text>
-```
+- renders a dashboard panel with themed assistant badges
+- shows live per-check spinner progress
+- prints a summary footer with aggregated status counts
 
-Meaning:
+Non-TTY mode:
+
+- prints one compact line per assistant
+
+Status meanings:
 
 - `ok`: the assistant command exists and the current environment appears authenticated
 - `no`: the assistant command exists but authentication was not detected
@@ -137,7 +165,7 @@ When stdout is a TTY, `zaima` shows a single-line spinner while each assistant i
 [2/4] checking claude-code  /
 ```
 
-The progress line is cleared automatically when the check finishes, so the final output remains clean.
+The progress line is cleared automatically when the check finishes, so the dashboard stays readable.
 
 ## Known Limitations
 
@@ -165,4 +193,4 @@ bash -n ./zaima
 
 ## Release
 
-Initial public release: `v0.1.0`
+Current documented release line: `v0.2.0`
