@@ -1,0 +1,11 @@
+.codex
+.omx/
+.webui_secret_key
+.zaima-home/
+.zaima-test/
+4d4y_cli/
+
+# Common editor / shell noise
+.DS_Store
+*.swp
+*.swo

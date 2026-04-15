@@ -1,0 +1,212 @@
+#!/usr/bin/env bash
+
+set -u
+set -o pipefail
+
+ZAIMA_VERSION="0.1.0"
+TIMEOUT_SECONDS="${ZAIMA_TIMEOUT:-20}"
+TOTAL_CHECKS=4
+
+print_help() {
+  cat <<'EOF'
+zaima - quick AI CLI login and version checker
+
+Usage:
+  zaima
+  zaima --help
+  zaima --version
+
+Environment:
+  ZAIMA_TIMEOUT   Per-check timeout in seconds (default: 20)
+  ZAIMA_PROGRESS  Show spinner progress in TTY output: 1 or 0 (default: 1)
+
+Output:
+  One result line per assistant:
+    <name> login=<ok|no|missing> version=<version text>
+EOF
+}
+
+first_non_empty_line() {
+  awk 'NF { print; exit }'
+}
+
+quiet_run() {
+  timeout "$TIMEOUT_SECONDS" "$@" 2>&1
+}
+
+progress_enabled() {
+  [[ -t 1 && "${ZAIMA_PROGRESS:-1}" != "0" ]]
+}
+
+show_spinner() {
+  local index="$1"
+  local name="$2"
+  local pid="$3"
+  local marks='|/-\'
+  local i=0
+  local mark
+
+  while kill -0 "$pid" 2>/dev/null; do
+    mark="${marks:i%${#marks}:1}"
+    printf '\r[%s/%s] checking %-12s %s' "$index" "$TOTAL_CHECKS" "$name" "$mark"
+    sleep 0.12
+    i=$((i + 1))
+  done
+
+  printf '\r\033[2K'
+}
+
+print_result() {
+  local name="$1"
+  local login="$2"
+  local version="$3"
+
+  if [[ -z "$version" ]]; then
+    version="-"
+  fi
+
+  printf '%-12s login=%-7s version=%s\n' "$name" "$login" "$version"
+}
+
+command_missing_result() {
+  print_result "$1" "missing" "-"
+}
+
+codex_login_status() {
+  local output
+
+  output="$(quiet_run codex login status || true)"
+  if [[ "$output" == *"Logged in"* ]]; then
+    printf '%s' "ok"
+  else
+    printf '%s' "no"
+  fi
+}
+
+claude_login_status() {
+  local output
+
+  output="$(quiet_run claude auth status --json || true)"
+  if [[ "$output" == *'"loggedIn": true'* ]]; then
+    printf '%s' "ok"
+  else
+    printf '%s' "no"
+  fi
+}
+
+gemini_login_status() {
+  local settings_file="$HOME/.gemini/settings.json"
+  local oauth_file="$HOME/.gemini/oauth_creds.json"
+
+  if [[ -n "${GEMINI_API_KEY:-}" || -n "${GOOGLE_API_KEY:-}" ]]; then
+    printf '%s' "ok"
+    return
+  fi
+
+  if [[ -f "$settings_file" && -f "$oauth_file" ]] \
+    && rg -q '"selected(AuthType|Type)"[[:space:]]*:[[:space:]]*"[^"]+"' "$settings_file" \
+    && rg -q '"(access_token|refresh_token)"[[:space:]]*:' "$oauth_file"; then
+    printf '%s' "ok"
+  else
+    printf '%s' "no"
+  fi
+}
+
+hermes_login_status() {
+  local output
+
+  output="$(quiet_run hermes auth list || true)"
+  if printf '%s\n' "$output" | rg -q 'credentials\):'; then
+    printf '%s' "ok"
+  else
+    printf '%s' "no"
+  fi
+}
+
+command_version() {
+  quiet_run "$@" | first_non_empty_line || true
+}
+
+report_codex() {
+  if ! command -v codex >/dev/null 2>&1; then
+    command_missing_result "codex"
+    return
+  fi
+
+  print_result \
+    "codex" \
+    "$(codex_login_status)" \
+    "$(command_version codex --version)"
+}
+
+report_claude() {
+  if ! command -v claude >/dev/null 2>&1; then
+    command_missing_result "claude-code"
+    return
+  fi
+
+  print_result \
+    "claude-code" \
+    "$(claude_login_status)" \
+    "$(command_version claude --version)"
+}
+
+report_gemini() {
+  if ! command -v gemini >/dev/null 2>&1; then
+    command_missing_result "gemini"
+    return
+  fi
+
+  print_result \
+    "gemini" \
+    "$(gemini_login_status)" \
+    "$(command_version gemini --version)"
+}
+
+report_hermes() {
+  if ! command -v hermes >/dev/null 2>&1; then
+    command_missing_result "hermes-agent"
+    return
+  fi
+
+  print_result \
+    "hermes-agent" \
+    "$(hermes_login_status)" \
+    "$(command_version hermes version)"
+}
+
+case "${1:-}" in
+  -h|--help)
+    print_help
+    exit 0
+    ;;
+  -V|--version)
+    printf 'zaima %s\n' "$ZAIMA_VERSION"
+    exit 0
+    ;;
+esac
+
+run_check() {
+  local index="$1"
+  local name="$2"
+  local fn="$3"
+  local tmp_file
+  local pid
+
+  tmp_file="$(mktemp)"
+  "$fn" >"$tmp_file" &
+  pid=$!
+
+  if progress_enabled; then
+    show_spinner "$index" "$name" "$pid"
+  fi
+
+  wait "$pid"
+  cat "$tmp_file"
+  rm -f "$tmp_file"
+}
+
+run_check 1 "codex" report_codex
+run_check 2 "claude-code" report_claude
+run_check 3 "gemini" report_gemini
+run_check 4 "hermes-agent" report_hermes
